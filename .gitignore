@@ -1,0 +1,8 @@
+# Locally generated from the user's installed game; never commit.
+localization/
+RussianPatch_Backups/
+*_with_originals.xlsx
+
+# Python cache
+__pycache__/
+*.py[cod]
