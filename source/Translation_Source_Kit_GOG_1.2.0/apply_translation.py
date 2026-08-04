@@ -103,7 +103,15 @@ def split_styled_text(text: str, segments: list[str], advances: list[int] | None
     # Java's String.split drops trailing empty records. A literal space keeps
     # every original style segment present while ensuring no English remainder
     # from a now-empty segment survives the import.
-    return [part if part else " " for part in [*result, remaining]]
+    parts = [*result, remaining]
+    # A leading space in an original record is often not prose: Flash uses it
+    # as the left inset of a separately clipped visual row. Preserve that
+    # inset, otherwise the first translated glyph can be drawn under the mask.
+    for index, segment in enumerate(segments):
+        inset = segment[:len(segment) - len(segment.lstrip())]
+        if inset:
+            parts[index] = inset + parts[index].lstrip()
+    return [part if part else " " for part in parts]
 
 def run_ffdec(java: Path, jar: Path, source: Path, output: Path, text_folder: Path) -> None:
     done = subprocess.run([str(java), "-jar", str(jar), "-config", "resetLetterSpacingOnTextImport=true", "-format", "text:plain", "-onerror", "abort", "-importText", str(source), str(output), str(text_folder)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
