@@ -80,17 +80,20 @@ def write_u30(value: int) -> bytes:
         byte = value & 127; value >>= 7; result.append(byte | (128 if value else 0))
         if not value: return bytes(result)
 
-def split_styled_text(text: str, segments: list[str]) -> list[str]:
+def split_styled_text(text: str, segments: list[str], advances: list[int] | None = None) -> list[str]:
     if len(segments) <= 1: return [text]
-    weights = [max(1, len(x)) for x in segments]; remaining = text; remaining_weight = sum(weights); result = []
+    weights = advances if advances and len(advances) == len(segments) else [max(1, len(x)) for x in segments]
+    weights = [max(1, value) for value in weights]; remaining = text; remaining_weight = sum(weights); result = []
     for weight in weights[:-1]:
         cut = max(0, min(len(remaining), round(len(remaining) * weight / remaining_weight)))
-        # Original SWF style records can be placed on different lines. Never
-        # split a translated Russian word between records: when the nearby
-        # window has no boundary, continue to the next word end instead.
+        # Original SWF records can be separate visual lines. Keep words whole,
+        # but choose the closest existing word boundary so that the following
+        # line retains its intended share of the text field.
         right = remaining.find(" ", cut)
         left = remaining.rfind(" ", 0, cut)
-        if right >= 0:
+        if right >= 0 and left >= 0:
+            cut = right + 1 if right + 1 - cut <= cut - (left + 1) else left + 1
+        elif right >= 0:
             cut = right + 1
         elif left >= 0:
             cut = left + 1
@@ -169,6 +172,57 @@ def iter_tags(data: bytes) -> Iterator[tuple[int, int, bytes]]:
         payload = data[pos:pos+length]; pos += length; yield code, length, payload
         if code == 0: return
 
+def read_bits(data: bytes, bit_pos: int, count: int) -> tuple[int, int]:
+    value = 0
+    for _ in range(count):
+        value = (value << 1) | ((data[bit_pos // 8] >> (7 - bit_pos % 8)) & 1)
+        bit_pos += 1
+    return value, bit_pos
+
+def skip_rect(data: bytes, pos: int) -> int:
+    bits, _ = read_bits(data, pos * 8, 5)
+    return pos + (5 + bits * 4 + 7) // 8
+
+def skip_matrix(data: bytes, pos: int) -> int:
+    bit_pos = pos * 8
+    has_scale, bit_pos = read_bits(data, bit_pos, 1)
+    if has_scale:
+        bits, bit_pos = read_bits(data, bit_pos, 5); bit_pos += bits * 2
+    has_rotate, bit_pos = read_bits(data, bit_pos, 1)
+    if has_rotate:
+        bits, bit_pos = read_bits(data, bit_pos, 5); bit_pos += bits * 2
+    bits, bit_pos = read_bits(data, bit_pos, 5); bit_pos += bits * 2
+    return (bit_pos + 7) // 8
+
+def read_signed_bits(data: bytes, bit_pos: int, count: int) -> tuple[int, int]:
+    value, bit_pos = read_bits(data, bit_pos, count)
+    return (value - (1 << count) if value & (1 << (count - 1)) else value), bit_pos
+
+def text_record_advances(source: Path, tag_id: int) -> list[int]:
+    fws, _ = decompress_swf(source.read_bytes())
+    for code, _length, payload in iter_tags(fws):
+        if code not in {11, 33} or len(payload) < 4 or int.from_bytes(payload[:2], "little") != tag_id:
+            continue
+        pos = skip_matrix(payload, skip_rect(payload, 2)); glyph_bits, advance_bits = payload[pos], payload[pos + 1]; pos += 2
+        result = []
+        while pos < len(payload) and payload[pos]:
+            flags = payload[pos]; pos += 1
+            if not flags & 0x80: return []
+            has_font, has_color = bool(flags & 8), bool(flags & 4)
+            if has_font: pos += 2
+            if has_color: pos += 4 if code == 33 else 3
+            if flags & 1: pos += 2
+            if flags & 2: pos += 2
+            if has_font: pos += 2
+            count = payload[pos]; pos += 1; bit_pos = pos * 8; total = 0
+            for _ in range(count):
+                _glyph, bit_pos = read_bits(payload, bit_pos, glyph_bits)
+                advance, bit_pos = read_signed_bits(payload, bit_pos, advance_bits)
+                total += max(0, advance)
+            result.append(max(1, total)); pos = (bit_pos + 7) // 8
+        return result
+    return []
+
 def patch_abc(abc: bytes, updates: dict[int, str]) -> bytes:
     pos = 4
     for width in (None, None, 8):
@@ -232,7 +286,10 @@ def main() -> int:
             text_folder = work / "text" / resource
             tag_folder = text_folder / "texts"
             for item in items:
-                tag_folder.mkdir(parents=True, exist_ok=True); (tag_folder / f"{item['tag_id']}.txt").write_text(RECORD_SEPARATOR.join(split_styled_text(translations[item['translation_key']], item['segments'])), encoding="utf-8-sig", newline="\n")
+                tag_folder.mkdir(parents=True, exist_ok=True)
+                advances = text_record_advances(root / resource, item['tag_id'])
+                parts = split_styled_text(translations[item['translation_key']], item['segments'], advances)
+                (tag_folder / f"{item['tag_id']}.txt").write_text(RECORD_SEPARATOR.join(parts), encoding="utf-8-sig", newline="\n")
             out = work / "patched" / resource; out.parent.mkdir(parents=True, exist_ok=True)
             fonted = work / "fonted" / resource; fonted.parent.mkdir(parents=True, exist_ok=True)
             font_ids = font_ids_for_replacement(root / resource)
