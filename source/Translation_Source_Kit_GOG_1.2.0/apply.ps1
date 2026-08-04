@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$GameDir, [string]$Translations, [string]$Python = "python", [string]$Font = "C:\Windows\Fonts\comic.ttf", [string]$FontName = "Comic Sans MS", [ValidateRange(0.1, 1.0)][double]$FontScale = 0.5, [switch]$DryRun, [string]$ToolRoot = (Join-Path $env:TEMP "grimoire-localization-tools"))
+param([string]$GameDir, [string]$Translations, [string]$Python = "python", [string]$Font = "C:\Windows\Fonts\comic.ttf", [string]$FontName = "Comic Sans MS", [ValidateRange(0.1, 1.0)][double]$FontScale = 0.5, [switch]$NoWordWrap, [switch]$DryRun, [string]$ToolRoot = (Join-Path $env:TEMP "grimoire-localization-tools"))
 $ErrorActionPreference = "Stop"
 $GameRoot = (Resolve-Path $(if ($GameDir) { $GameDir } else { Join-Path $PSScriptRoot ".." })).Path
 if (-not $Translations) { $Translations = Get-ChildItem -LiteralPath (Join-Path $GameRoot "localization\outputs") -Recurse -Filter "translations_ru.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName }
@@ -17,11 +17,17 @@ $extractor = Join-Path $PSScriptRoot "extract_texts.py"
 if ($LASTEXITCODE -ne 0) { throw "Local text extraction failed with exit code $LASTEXITCODE." }
 $Catalog = Join-Path $GameRoot "localization\catalog\occurrences.jsonl"
 $Catalog = (Resolve-Path $Catalog).Path
-$backup = Join-Path $GameRoot ("localization\backups\" + (Get-Date -Format "yyyyMMdd-HHmmss")); $params = @((Join-Path $PSScriptRoot "apply_translation.py"), "--root", $GameRoot, "--translations", $Translations, "--catalog", $Catalog, "--java", $java, "--ffdec-jar", $jar, "--font", $Font, "--font-name", $FontName, "--backup-dir", $backup)
+$backup = Join-Path $GameRoot ("localization\backups\" + (Get-Date -Format "yyyyMMdd-HHmmss")); $params = @((Join-Path $PSScriptRoot "apply_translation.py"), "--root", $GameRoot, "--translations", $Translations, "--catalog", $Catalog, "--java", $java, "--ffdec-jar", $jar, "--font", $Font, "--font-name", $FontName, "--backup-dir", $backup); $lastManifest = Join-Path $backup "manifest.json"
 if ($DryRun) { $params += "--dry-run" }; & $Python @params
 if ($LASTEXITCODE -ne 0) { throw "Localization apply failed with exit code $LASTEXITCODE." }
 if (-not $DryRun -and $FontScale -ne 1.0) {
     $scaleBackup = Join-Path $GameRoot ("localization\backups\" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-font" + [int]($FontScale * 100))
     & $Python (Join-Path $PSScriptRoot "scale_text.py") --root $GameRoot --manifest (Join-Path $backup "manifest.json") --backup-dir $scaleBackup --scale $FontScale
     if ($LASTEXITCODE -ne 0) { throw "Font scaling failed with exit code $LASTEXITCODE." }
+    $lastManifest = Join-Path $scaleBackup "manifest.json"
+}
+if (-not $DryRun -and -not $NoWordWrap) {
+    $wrapBackup = Join-Path $GameRoot ("localization\backups\" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-wrap")
+    & $Python (Join-Path $PSScriptRoot "wrap_static_text.py") --root $GameRoot --manifest $lastManifest --catalog $Catalog --translations $Translations --backup-dir $wrapBackup
+    if ($LASTEXITCODE -ne 0) { throw "Word wrapping failed with exit code $LASTEXITCODE." }
 }
