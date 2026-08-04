@@ -141,7 +141,16 @@ def scale_edit_text(payload: bytes, factor: float) -> tuple[bytes, int]:
     return bytes(data), int(old != new)
 
 
-def scale_swf(path: Path, factor: float) -> int:
+def fitting_scale(source: Path, target: Path, tag_id: int, final_scale: float) -> float:
+    capacity = swf.text_record_advances(source, tag_id)
+    actual = swf.text_record_advances(target, tag_id)
+    if not capacity or len(capacity) != len(actual):
+        return 1.0
+    ratios = [limit / (used * final_scale) for limit, used in zip(capacity, actual) if used * final_scale > limit]
+    return max(0.1, min(1.0, min(ratios) * 0.98)) if ratios else 1.0
+
+
+def scale_swf(path: Path, factor: float, tag_scales: dict[str, float] | None = None) -> int:
     raw = path.read_bytes()
     fws, lzma_properties = swf.decompress_swf(raw)
     data = bytearray(fws)
@@ -158,7 +167,9 @@ def scale_swf(path: Path, factor: float) -> int:
         if code in TEXT_TAGS:
             payload = bytes(data[pos:end])
             if code in {11, 33}:
-                replacement, count = scale_static_text(payload, code, factor)
+                tag_id = str(int.from_bytes(payload[:2], "little"))
+                local_factor = (tag_scales or {}).get(tag_id, 1.0)
+                replacement, count = scale_static_text(payload, code, factor * local_factor)
             else:
                 replacement, count = scale_edit_text(payload, factor)
             if len(replacement) != len(payload):
@@ -190,6 +201,7 @@ def main() -> int:
     files = [item["resource"] for item in manifest["files"]]
     args.backup_dir.mkdir(parents=True, exist_ok=False)
     output = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "scale": args.scale, "source_manifest": str(args.manifest), "files": []}
+    translated_tags = manifest.get("static_tags", {})
     for resource in files:
         target = root / resource
         if not target.exists():
@@ -197,11 +209,14 @@ def main() -> int:
         backup = args.backup_dir / resource
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(target, backup)
-        count = scale_swf(target, args.scale)
+        source = args.manifest.parent / resource
+        local_scales = {tag: scale for tag in translated_tags.get(resource, []) if (scale := fitting_scale(source, target, int(tag), args.scale)) < 0.995}
+        count = scale_swf(target, args.scale, local_scales)
         # A second parse verifies that recompression produced a valid SWF.
         swf.decompress_swf(target.read_bytes())
-        output["files"].append({"resource": resource, "heights_scaled": count, "backup_sha256": sha256(backup), "patched_sha256": sha256(target)})
-        print(f"[scaled] {resource}: {count} text-height values")
+        output["files"].append({"resource": resource, "heights_scaled": count, "fitted_tags": local_scales, "backup_sha256": sha256(backup), "patched_sha256": sha256(target)})
+        suffix = f"; {len(local_scales)} fitted text tags" if local_scales else ""
+        print(f"[scaled] {resource}: {count} text-height values{suffix}")
     (args.backup_dir / "manifest.json").write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"[done] Backup: {args.backup_dir}")
     return 0

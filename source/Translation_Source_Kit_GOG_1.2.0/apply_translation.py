@@ -279,7 +279,7 @@ def main() -> int:
     print(f"[catalog] {len(translations)} translated keys; {sum(map(len, static.values()))} static and {sum(map(len, dynamic.values()))} dynamic occurrences")
     print(f"[plan] {len(files)} SWF files will be changed")
     if args.dry_run: return 0
-    args.backup_dir.mkdir(parents=True, exist_ok=False); manifest = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "translations": str(args.translations), "files": []}
+    args.backup_dir.mkdir(parents=True, exist_ok=False); manifest = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "translations": str(args.translations), "files": [], "static_tags": {resource: sorted({str(item["tag_id"]) for item in items}) for resource, items in static.items()}}
     with tempfile.TemporaryDirectory(prefix="grimoire-apply-", dir=root / "localization") as folder:
         work = Path(folder)
         for resource, items in sorted(static.items()):
