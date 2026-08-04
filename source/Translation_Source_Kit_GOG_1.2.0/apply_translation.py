@@ -2,7 +2,7 @@
 """Apply a translated catalog to Detective Grimoire SWF resources safely."""
 from __future__ import annotations
 
-import argparse, datetime as dt, hashlib, json, lzma, shutil, subprocess, sys, tempfile, zipfile, zlib
+import argparse, datetime as dt, hashlib, json, lzma, re, shutil, subprocess, sys, tempfile, zipfile, zlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterator
@@ -65,6 +65,35 @@ def load_translations(path: Path) -> dict[str, str]:
             if key in output and output[key] != text: raise ValueError(f"Conflicting translation for {key} in row {number}")
             output[key] = text
     if not output: raise ValueError("No non-empty translations found")
+    return output
+
+def load_code_audit_translations(path: Path) -> dict[tuple[str, int], tuple[str, str]]:
+    """Read reviewed dynamic strings from the optional Russian code-audit sheet."""
+    try:
+        rows = read_xlsx_sheet(path, "Аудит кода")
+    except ValueError:
+        return {}
+    if not rows:
+        return {}
+    headers = {name: i for i, name in enumerate(rows[0])}
+    required = {"Класс", "Индексы ABC", "Перевод"}
+    if not required <= headers.keys():
+        return {}
+    original_column = headers.get("Оригинал", headers.get("Строка"))
+    output: dict[tuple[str, int], tuple[str, str]] = {}
+    for number, row in enumerate(rows[1:], 2):
+        value = row[headers["Перевод"]] if len(row) > headers["Перевод"] else ""
+        if (row[headers["Класс"]] if len(row) > headers["Класс"] else "") != "translate" or not value.strip():
+            continue
+        reference = row[headers["Индексы ABC"]] if len(row) > headers["Индексы ABC"] else ""
+        match = re.fullmatch(r"([^:]+):(\d+)", reference.strip())
+        if not match:
+            raise ValueError(f"Invalid ABC index in code-audit row {number}: {reference!r}")
+        key = (match.group(1), int(match.group(2)))
+        source = row[original_column] if original_column is not None and len(row) > original_column else ""
+        if key in output and output[key][0] != value:
+            raise ValueError(f"Conflicting code-audit translation for {reference} in row {number}")
+        output[key] = (value, source)
     return output
 
 def read_u30(data: bytes, pos: int) -> tuple[int, int]:
@@ -267,7 +296,7 @@ def main() -> int:
     args = parse_args(); root = args.root.resolve(); catalog = args.catalog or root / "localization" / "catalog" / "occurrences.jsonl"
     for item in (root / MAIN_SWF, args.translations, args.java, args.ffdec_jar, args.font, catalog):
         if not item.exists(): raise FileNotFoundError(item)
-    translations = load_translations(args.translations); occurrences = [json.loads(x) for x in catalog.read_text(encoding="utf-8").splitlines() if x]
+    translations = load_translations(args.translations); audit_translations = load_code_audit_translations(args.translations); occurrences = [json.loads(x) for x in catalog.read_text(encoding="utf-8").splitlines() if x]
     known = {x["translation_key"] for x in occurrences}
     if unknown := set(translations) - known: raise ValueError(f"Workbook has {len(unknown)} unknown keys")
     static: dict[str, list[dict]] = defaultdict(list); dynamic: dict[str, dict[int, str]] = defaultdict(dict)
@@ -276,6 +305,13 @@ def main() -> int:
         if not text: continue
         if item["kind"] == "swf_text": static[item["resource"]].append(item)
         if item["kind"] == "abc_string": dynamic[item["abc_name"]][item["abc_string_index"]] = text
+    dynamic_sources = {(item["abc_name"], item["abc_string_index"]): item["source"] for item in occurrences if item["kind"] == "abc_string"}
+    for key, (text, source) in audit_translations.items():
+        if key not in dynamic_sources:
+            raise ValueError(f"Code-audit index is absent from the local game catalog: {key[0]}:{key[1]}")
+        if source and source != dynamic_sources[key]:
+            raise ValueError(f"Code-audit original does not match the local game at {key[0]}:{key[1]}")
+        dynamic[key[0]][key[1]] = text
     if args.resource:
         requested = set(args.resource)
         unknown = requested - set(static)
@@ -284,7 +320,7 @@ def main() -> int:
         static = defaultdict(list, {resource: items for resource, items in static.items() if resource in requested})
         dynamic = defaultdict(dict)
     files = set(static) | ({MAIN_SWF} if dynamic else set())
-    print(f"[catalog] {len(translations)} translated keys; {sum(map(len, static.values()))} static and {sum(map(len, dynamic.values()))} dynamic occurrences")
+    print(f"[catalog] {len(translations)} translated keys; {sum(map(len, static.values()))} static and {sum(map(len, dynamic.values()))} dynamic occurrences ({len(audit_translations)} from code audit)")
     print(f"[plan] {len(files)} SWF files will be changed")
     if args.dry_run: return 0
     args.backup_dir.mkdir(parents=True, exist_ok=False); manifest = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "translations": str(args.translations), "files": [], "static_tags": {resource: sorted({str(item["tag_id"]) for item in items}) for resource, items in static.items()}}
