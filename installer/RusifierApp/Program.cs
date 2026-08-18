@@ -96,13 +96,13 @@ internal static class Program
 
         SetProgressStage("Извлечение каталога строк");
         Log(logPath, "Извлечение каталога строк.");
-        Run(python, Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot, HandleExtractProgress);
+        Run(python, "-u " + Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot, HandleExtractProgress);
         SetProgressStage("Применение перевода к ресурсам игры");
         Log(logPath, "Применение перевода.");
-        Run(python, Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot, HandleApplyProgress);
+        Run(python, "-u " + Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot, HandleApplyProgress);
         SetProgressStage("Настройка размера текста");
         Log(logPath, "Масштабирование текста.");
-        Run(python, Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot, HandleScaleProgress);
+        Run(python, "-u " + Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot, HandleScaleProgress);
     }
 
     private static string CreateBackupArchive(string gameRoot, VersionManifest manifest)
