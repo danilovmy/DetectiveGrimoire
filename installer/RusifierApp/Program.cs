@@ -17,6 +17,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         var gameRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         string? archive = null;
+        Form? progress = null;
         try
         {
             var payloadRoot = ExtractPayload();
@@ -41,20 +42,24 @@ internal static class Program
                 return;
             }
 
+            progress = ShowProgress();
             archive = CreateBackupArchive(gameRoot, manifest);
             RunPatch(gameRoot, payloadRoot, archive);
 
             if (DetectState(gameRoot, manifest) != InstallState.Patched)
                 throw new InvalidOperationException("Проверка после применения не пройдена.");
 
-            Show("Перевод применён", $"Оригинальные файлы сохранены в:\n{archive}\n\nДля отмены: переустановите игру или скопируйте файлы из этого архива обратно в папку игры.", MessageBoxIcon.Information);
+            CloseProgress(progress); progress = null;
+            Show("Перевод применён", $"Русификация успешно применена.\n\nОригинальные файлы сохранены в:\n{archive}\n\nДля отмены: переустановите игру или скопируйте файлы из этого архива обратно в папку игры.\n\nСпасибо за перевод danilovmy и codex-terra.", MessageBoxIcon.Information);
         }
         catch (Exception error)
         {
+            CloseProgress(progress); progress = null;
             var restored = archive is not null && RestoreBackup(gameRoot, archive);
             var recovery = restored ? "\n\nОригиналы автоматически восстановлены из созданного архива." : "";
             Show("Перевод не применён", $"Ничего не считается установленным. Причина:\n{error.Message}{recovery}", MessageBoxIcon.Error);
         }
+        finally { CloseProgress(progress); }
     }
 
     private static void RunPatch(string gameRoot, string payloadRoot, string archive)
@@ -134,6 +139,40 @@ internal static class Program
         archive.ExtractToDirectory(root);
         File.WriteAllText(marker, "ok");
         return root;
+    }
+
+    private static Form ShowProgress()
+    {
+        var form = new Form
+        {
+            Text = "Русификация Detective Grimoire",
+            ClientSize = new Size(410, 110),
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ControlBox = false,
+            StartPosition = FormStartPosition.CenterScreen,
+            TopMost = true,
+            ShowInTaskbar = true,
+        };
+        form.Controls.Add(new Label
+        {
+            Text = "Перевод выполняется…\nНе закрывайте это окно и дождитесь результата.",
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Dock = DockStyle.Fill,
+            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Regular),
+        });
+        form.Show();
+        Application.DoEvents();
+        return form;
+    }
+
+    private static void CloseProgress(Form? form)
+    {
+        if (form is null || form.IsDisposed) return;
+        form.Close();
+        form.Dispose();
     }
 
     private static void Run(string fileName, string arguments, string workingDirectory)
