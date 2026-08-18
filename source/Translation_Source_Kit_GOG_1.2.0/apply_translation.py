@@ -305,15 +305,19 @@ def sha256(path: Path) -> str:
 
 def main() -> int:
     args = parse_args(); root = args.root.resolve(); catalog = args.catalog or root / "localization" / "catalog" / "occurrences.jsonl"
+    print("[prepare] 1/5 checking required files")
     for item in (root / MAIN_SWF, args.translations, args.java, args.ffdec_jar, args.font, catalog):
         if not item.exists(): raise FileNotFoundError(item)
+    print("[prepare] 2/5 loading translation workbook")
     translations = load_translations(args.translations)
     # A resource-limited run never edits ABC bytecode, so code-audit entries
     # from a different build must not block a static-SWF diagnostic run.
     audit_translations = {} if args.resource else load_code_audit_translations(args.translations)
+    print("[prepare] 3/5 loading extracted game catalog")
     occurrences = [json.loads(x) for x in catalog.read_text(encoding="utf-8").splitlines() if x]
     known = {x["translation_key"] for x in occurrences}
     if unknown := set(translations) - known: raise ValueError(f"Workbook has {len(unknown)} unknown keys")
+    print("[prepare] 4/5 matching translations to game text")
     static: dict[str, list[dict]] = defaultdict(list); dynamic: dict[str, dict[int, str]] = defaultdict(dict)
     for item in occurrences:
         text = translations.get(item["translation_key"])
@@ -334,6 +338,7 @@ def main() -> int:
             raise ValueError(f"No translated static text for: {sorted(unknown)}")
         static = defaultdict(list, {resource: items for resource, items in static.items() if resource in requested})
         dynamic = defaultdict(dict)
+    print("[prepare] 5/5 building SWF processing plan")
     files = set(static) | ({MAIN_SWF} if dynamic else set())
     print(f"[catalog] {len(translations)} translated keys; {sum(map(len, static.values()))} static and {sum(map(len, dynamic.values()))} dynamic occurrences ({len(audit_translations)} from code audit)")
     print(f"[plan] {len(files)} SWF files will be changed")

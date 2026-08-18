@@ -94,13 +94,13 @@ internal static class Program
         var applyBackup = Path.Combine(gameRoot, "localization", "backups", timestamp + "-ru-apply");
         var scaleBackup = Path.Combine(gameRoot, "localization", "backups", timestamp + "-ru-scale");
 
-        SetProgressStage("Извлечение каталога строк");
+        SetProgressStage("Извлечение каталога строк", "Запускается анализ игровых ресурсов");
         Log(logPath, "Извлечение каталога строк.");
         Run(python, "-u " + Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot, HandleExtractProgress);
-        SetProgressStage("Применение перевода к ресурсам игры");
+        SetProgressStage("Подготовка применения перевода", "Запускается проверка каталога и таблицы перевода");
         Log(logPath, "Применение перевода.");
         Run(python, "-u " + Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot, HandleApplyProgress);
-        SetProgressStage("Настройка размера текста");
+        SetProgressStage("Настройка размера текста", "Подготавливается подгонка переведённых текстовых блоков");
         Log(logPath, "Масштабирование текста.");
         Run(python, "-u " + Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot, HandleScaleProgress);
     }
@@ -214,9 +214,10 @@ internal static class Program
         form.Dispose();
     }
 
-    private static void SetProgressStage(string stage)
+    private static void SetProgressStage(string stage, string detail)
     {
         progressStage = stage;
+        progressDetail = detail;
         UpdateProgressLabel();
     }
 
@@ -232,7 +233,9 @@ internal static class Program
 
     private static void HandleApplyProgress(string line)
     {
-        if (line.StartsWith("[plan] ", StringComparison.Ordinal))
+        if (line.StartsWith("[prepare] ", StringComparison.Ordinal))
+            progressDetail = "Подготовка: " + line[10..];
+        else if (line.StartsWith("[plan] ", StringComparison.Ordinal))
             progressDetail = "План: " + line[7..];
         else if (line.StartsWith("[applying] ", StringComparison.Ordinal))
             progressDetail = "Обрабатывается SWF: " + line[11..];
