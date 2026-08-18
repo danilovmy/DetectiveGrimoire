@@ -11,10 +11,9 @@
 - [Steam — Detective Grimoire](https://store.steampowered.com/app/272600/Detective_Grimoire/)
 - [GOG — Detective Grimoire](https://www.gog.com/en/game/detective_grimoire)
 
-## Готовый установщик
-
-Готовый русификатор находится в `installer/dist/Detective-Grimoire-RU-Installer.exe`. 
-Скопируйте его в папку с `Detective Grimoire.exe` и запустите: он проверит поддерживаемую GOG-версию 1.2.0, создаст резервную копию и применит перевод. 
+## Готовый русификатор
+ 
+Скопируйте [Готовый русификатор]([https://github.com/danilovmy/DetectiveGrimoire/raw/refs/heads/main/installer/dist/Detective-Grimoire-RU-Installer.exe?download=]) в папку с `Detective Grimoire.exe` и запустите: он проверит поддерживаемую GOG-версию 1.2.0, создаст резервную копию и применит перевод. 
 В EXE встроены только перевод и инструменты применения.
 __Готовый файл, как и весь репозиторий НЕ СОДЕРЖИТ игровых SWF, изображений, звука и исходных английских текстов!__
 
