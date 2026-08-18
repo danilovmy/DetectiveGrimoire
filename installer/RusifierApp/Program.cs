@@ -11,18 +11,32 @@ internal sealed record VersionManifest(string GameExecutable, List<FileSignature
 
 internal static class Program
 {
+    private static Label? progressLabel;
+    private static System.Windows.Forms.Timer? progressTimer;
+    private static DateTime progressStartedAt;
+    private static string progressStage = "Подготовка";
+
     [STAThread]
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
+        using var singleInstance = new Mutex(true, "DetectiveGrimoire-RU-Installer", out var isFirstInstance);
+        if (!isFirstInstance)
+        {
+            Show("Перевод уже выполняется", "Установщик уже запущен. Дождитесь его итогового сообщения и не запускайте EXE повторно.", MessageBoxIcon.Information);
+            return;
+        }
         var gameRoot = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var logPath = Path.Combine(gameRoot, "DetectiveGrimoire-RU-Installer.log");
         string? archive = null;
         Form? progress = null;
         try
         {
+            Log(logPath, "Запуск установщика.");
             var payloadRoot = ExtractPayload();
             var manifest = JsonSerializer.Deserialize<VersionManifest>(File.ReadAllText(Path.Combine(payloadRoot, "version.json")), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidDataException("Не удалось прочитать manifest русификатора.");
+            Log(logPath, "Полезная нагрузка распакована, manifest прочитан.");
 
             if (!File.Exists(Path.Combine(gameRoot, manifest.GameExecutable)))
             {
@@ -31,6 +45,7 @@ internal static class Program
             }
 
             var state = DetectState(gameRoot, manifest);
+            Log(logPath, $"Состояние файлов игры: {state}.");
             if (state == InstallState.Patched)
             {
                 Show("Перевод уже применён", "Установленная игра уже содержит эту версию перевода.", MessageBoxIcon.Information);
@@ -44,17 +59,20 @@ internal static class Program
 
             progress = ShowProgress();
             archive = CreateBackupArchive(gameRoot, manifest);
-            RunPatch(gameRoot, payloadRoot, archive);
+            Log(logPath, $"Резервная копия создана: {archive}");
+            RunPatch(gameRoot, payloadRoot, archive, logPath);
 
             if (DetectState(gameRoot, manifest) != InstallState.Patched)
                 throw new InvalidOperationException("Проверка после применения не пройдена.");
 
             CloseProgress(progress); progress = null;
+            Log(logPath, "Перевод применён и проверен.");
             Show("Перевод применён", $"Русификация успешно применена.\n\nОригинальные файлы сохранены в:\n{archive}\n\nДля отмены: переустановите игру или скопируйте файлы из этого архива обратно в папку игры.\n\nСпасибо за перевод danilovmy и codex-terra.", MessageBoxIcon.Information);
         }
         catch (Exception error)
         {
             CloseProgress(progress); progress = null;
+            Log(logPath, error.ToString());
             var restored = archive is not null && RestoreBackup(gameRoot, archive);
             var recovery = restored ? "\n\nОригиналы автоматически восстановлены из созданного архива." : "";
             Show("Перевод не применён", $"Ничего не считается установленным. Причина:\n{error.Message}{recovery}", MessageBoxIcon.Error);
@@ -62,7 +80,7 @@ internal static class Program
         finally { CloseProgress(progress); }
     }
 
-    private static void RunPatch(string gameRoot, string payloadRoot, string archive)
+    private static void RunPatch(string gameRoot, string payloadRoot, string archive, string logPath)
     {
         var python = Path.Combine(payloadRoot, "python", "python.exe");
         var java = Path.Combine(payloadRoot, "jre", "bin", "java.exe");
@@ -75,9 +93,15 @@ internal static class Program
         var applyBackup = Path.Combine(gameRoot, "localization", "backups", timestamp + "-ru-apply");
         var scaleBackup = Path.Combine(gameRoot, "localization", "backups", timestamp + "-ru-scale");
 
+        SetProgressStage("Извлечение каталога строк");
+        Log(logPath, "Извлечение каталога строк.");
         Run(python, Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot);
+        SetProgressStage("Применение перевода к ресурсам игры");
+        Log(logPath, "Применение перевода.");
         Run(python, Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot);
-        Run(python, Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(Path.Combine(applyBackup, "manifest.json")) + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot);
+        SetProgressStage("Настройка размера текста");
+        Log(logPath, "Масштабирование текста.");
+        Run(python, Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot);
     }
 
     private static string CreateBackupArchive(string gameRoot, VersionManifest manifest)
@@ -127,7 +151,9 @@ internal static class Program
 
     private static string ExtractPayload()
     {
-        var payloadVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "current";
+        // Меняем суффикс при изменении встроенной полезной нагрузки: иначе Windows
+        // может повторно использовать распакованный набор файлов от прежней сборки.
+        var payloadVersion = (Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "current") + "-r2";
         var root = Path.Combine(Path.GetTempPath(), "DetectiveGrimoire-RU-Installer", payloadVersion);
         var marker = Path.Combine(root, ".ready");
         if (File.Exists(marker)) return root;
@@ -155,14 +181,21 @@ internal static class Program
             TopMost = true,
             ShowInTaskbar = true,
         };
-        form.Controls.Add(new Label
+        progressStartedAt = DateTime.Now;
+        progressStage = "Подготовка";
+        progressLabel = new Label
         {
-            Text = "Перевод выполняется…\nНе закрывайте это окно и дождитесь результата.",
+            Text = "",
             AutoSize = false,
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Fill,
-            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Regular),
-        });
+            Font = SystemFonts.MessageBoxFont,
+        };
+        form.Controls.Add(progressLabel);
+        progressTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        progressTimer.Tick += (_, _) => UpdateProgressLabel();
+        progressTimer.Start();
+        UpdateProgressLabel();
         form.Show();
         Application.DoEvents();
         return form;
@@ -171,8 +204,30 @@ internal static class Program
     private static void CloseProgress(Form? form)
     {
         if (form is null || form.IsDisposed) return;
+        progressTimer?.Stop();
+        progressTimer?.Dispose();
+        progressTimer = null;
+        progressLabel = null;
         form.Close();
         form.Dispose();
+    }
+
+    private static void SetProgressStage(string stage)
+    {
+        progressStage = stage;
+        UpdateProgressLabel();
+    }
+
+    private static void UpdateProgressLabel()
+    {
+        if (progressLabel is null || progressLabel.IsDisposed) return;
+        var elapsed = DateTime.Now - progressStartedAt;
+        progressLabel.Text = $"{progressStage}…\nПрошло: {elapsed:mm\\:ss}\n\nНе закрывайте это окно и дождитесь результата.";
+    }
+
+    private static void Log(string path, string message)
+    {
+        File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
     }
 
     private static void Run(string fileName, string arguments, string workingDirectory)
@@ -185,9 +240,12 @@ internal static class Program
             RedirectStandardError = true,
             RedirectStandardOutput = true,
         }) ?? throw new InvalidOperationException("Не удалось запустить встроенный инструмент.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        while (!process.WaitForExit(100)) Application.DoEvents();
+        Task.WaitAll(stdoutTask, stderrTask);
+        var stdout = stdoutTask.Result;
+        var stderr = stderrTask.Result;
         if (process.ExitCode != 0)
             throw new InvalidOperationException((stderr + "\n" + stdout).Trim());
     }
