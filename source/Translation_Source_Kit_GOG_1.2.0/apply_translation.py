@@ -112,8 +112,18 @@ def write_u30(value: int) -> bytes:
 def split_styled_text(text: str, segments: list[str], advances: list[int] | None = None) -> list[str]:
     if len(segments) <= 1: return [text]
     weights = advances if advances and len(advances) == len(segments) else [max(1, len(x)) for x in segments]
-    weights = [max(1, value) for value in weights]; remaining = text; remaining_weight = sum(weights); result = []
-    for weight in weights[:-1]:
+    weights = [max(1, value) for value in weights]
+    # Some SWF records carry only a spacer/inset (typically a single space),
+    # but their tiny width was previously treated as a full visual line. That
+    # forces a word into a record with no usable capacity and shrinks the whole
+    # text tag to the emergency minimum. Keep those records empty instead.
+    largest = max(weights)
+    active = [index for index, weight in enumerate(weights) if weight >= largest * 0.15]
+    if not active:
+        active = list(range(len(weights)))
+    active_weights = [weights[index] for index in active]
+    remaining = text; remaining_weight = sum(active_weights); result = [" "] * len(segments)
+    for index, weight in zip(active[:-1], active_weights[:-1]):
         cut = max(0, min(len(remaining), round(len(remaining) * weight / remaining_weight)))
         # Original SWF records can be separate visual lines. Keep words whole,
         # but choose the closest existing word boundary so that the following
@@ -128,11 +138,12 @@ def split_styled_text(text: str, segments: list[str], advances: list[int] | None
             cut = left + 1
         else:
             cut = len(remaining)
-        result.append(remaining[:cut]); remaining = remaining[cut:]; remaining_weight -= weight
+        result[index] = remaining[:cut]; remaining = remaining[cut:]; remaining_weight -= weight
     # Java's String.split drops trailing empty records. A literal space keeps
     # every original style segment present while ensuring no English remainder
     # from a now-empty segment survives the import.
-    parts = [*result, remaining]
+    result[active[-1]] = remaining
+    parts = result
     # A leading space in an original record is often not prose: Flash uses it
     # as the left inset of a separately clipped visual row. Preserve that
     # inset, otherwise the first translated glyph can be drawn under the mask.
@@ -296,7 +307,11 @@ def main() -> int:
     args = parse_args(); root = args.root.resolve(); catalog = args.catalog or root / "localization" / "catalog" / "occurrences.jsonl"
     for item in (root / MAIN_SWF, args.translations, args.java, args.ffdec_jar, args.font, catalog):
         if not item.exists(): raise FileNotFoundError(item)
-    translations = load_translations(args.translations); audit_translations = load_code_audit_translations(args.translations); occurrences = [json.loads(x) for x in catalog.read_text(encoding="utf-8").splitlines() if x]
+    translations = load_translations(args.translations)
+    # A resource-limited run never edits ABC bytecode, so code-audit entries
+    # from a different build must not block a static-SWF diagnostic run.
+    audit_translations = {} if args.resource else load_code_audit_translations(args.translations)
+    occurrences = [json.loads(x) for x in catalog.read_text(encoding="utf-8").splitlines() if x]
     known = {x["translation_key"] for x in occurrences}
     if unknown := set(translations) - known: raise ValueError(f"Workbook has {len(unknown)} unknown keys")
     static: dict[str, list[dict]] = defaultdict(list); dynamic: dict[str, dict[int, str]] = defaultdict(dict)

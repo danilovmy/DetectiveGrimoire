@@ -2,6 +2,13 @@
 localization/
 RussianPatch_Backups/
 *_with_originals.xlsx
+*.xlsx.inspect.ndjson
+
+# Recreated locally by installer/build_rusifier.ps1; only the final EXE is distributed.
+installer/payload/
+installer/payload-slim.zip
+installer/RusifierApp/bin/
+installer/RusifierApp/obj/
 
 # Python cache
 __pycache__/
