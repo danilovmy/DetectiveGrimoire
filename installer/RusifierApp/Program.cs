@@ -15,6 +15,7 @@ internal static class Program
     private static System.Windows.Forms.Timer? progressTimer;
     private static DateTime progressStartedAt;
     private static string progressStage = "Подготовка";
+    private static string progressDetail = "Подготовка встроенных инструментов";
 
     [STAThread]
     private static void Main()
@@ -95,13 +96,13 @@ internal static class Program
 
         SetProgressStage("Извлечение каталога строк");
         Log(logPath, "Извлечение каталога строк.");
-        Run(python, Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot);
+        Run(python, Quote(Path.Combine(scripts, "extract_texts.py")) + " --root " + Quote(gameRoot) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec), payloadRoot, HandleExtractProgress);
         SetProgressStage("Применение перевода к ресурсам игры");
         Log(logPath, "Применение перевода.");
-        Run(python, Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot);
+        Run(python, Quote(Path.Combine(scripts, "apply_translation.py")) + " --root " + Quote(gameRoot) + " --translations " + Quote(xlsx) + " --catalog " + Quote(Path.Combine(generatedCatalog, "occurrences.jsonl")) + " --java " + Quote(java) + " --ffdec-jar " + Quote(ffdec) + " --font " + Quote(font) + " --font-name " + Quote("Comic Sans MS") + " --backup-dir " + Quote(applyBackup), payloadRoot, HandleApplyProgress);
         SetProgressStage("Настройка размера текста");
         Log(logPath, "Масштабирование текста.");
-        Run(python, Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot);
+        Run(python, Quote(Path.Combine(scripts, "scale_text.py")) + " --root " + Quote(gameRoot) + " --manifest " + Quote(applyBackup + "\\manifest.json") + " --backup-dir " + Quote(scaleBackup) + " --scale 0.5", payloadRoot, HandleScaleProgress);
     }
 
     private static string CreateBackupArchive(string gameRoot, VersionManifest manifest)
@@ -172,7 +173,7 @@ internal static class Program
         var form = new Form
         {
             Text = "Русификация Detective Grimoire",
-            ClientSize = new Size(410, 110),
+            ClientSize = new Size(560, 140),
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
             MinimizeBox = false,
@@ -183,6 +184,7 @@ internal static class Program
         };
         progressStartedAt = DateTime.Now;
         progressStage = "Подготовка";
+        progressDetail = "Создаётся резервная копия оригинальных файлов";
         progressLabel = new Label
         {
             Text = "",
@@ -218,11 +220,37 @@ internal static class Program
         UpdateProgressLabel();
     }
 
+    private static void HandleExtractProgress(string line)
+    {
+        if (line.StartsWith("[extract-plan] ", StringComparison.Ordinal))
+            progressDetail = "Подготавливается список игровых ресурсов: " + line[15..];
+        else if (line.StartsWith("[extract] ", StringComparison.Ordinal))
+            progressDetail = "Извлекаются строки: группа " + line[10..];
+        else if (line.StartsWith("[done] ", StringComparison.Ordinal) && line.Contains("SWF text occurrences", StringComparison.Ordinal))
+            progressDetail = "Извлечено текстовых вхождений: " + line[7..];
+    }
+
+    private static void HandleApplyProgress(string line)
+    {
+        if (line.StartsWith("[plan] ", StringComparison.Ordinal))
+            progressDetail = "План: " + line[7..];
+        else if (line.StartsWith("[applying] ", StringComparison.Ordinal))
+            progressDetail = "Обрабатывается SWF: " + line[11..];
+        else if (line.StartsWith("[patched] ", StringComparison.Ordinal))
+            progressDetail = "Файл применён: " + line[10..];
+    }
+
+    private static void HandleScaleProgress(string line)
+    {
+        if (line.StartsWith("[scaled] ", StringComparison.Ordinal))
+            progressDetail = "Подгонка текста: " + line[9..];
+    }
+
     private static void UpdateProgressLabel()
     {
         if (progressLabel is null || progressLabel.IsDisposed) return;
         var elapsed = DateTime.Now - progressStartedAt;
-        progressLabel.Text = $"{progressStage}…\nПрошло: {elapsed:mm\\:ss}\n\nНе закрывайте это окно и дождитесь результата.";
+        progressLabel.Text = $"{progressStage}…\n{progressDetail}\nПрошло: {elapsed:mm\\:ss}\n\nНе закрывайте это окно и дождитесь результата.";
     }
 
     private static void Log(string path, string message)
@@ -230,7 +258,7 @@ internal static class Program
         File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
     }
 
-    private static void Run(string fileName, string arguments, string workingDirectory)
+    private static void Run(string fileName, string arguments, string workingDirectory, Action<string>? onOutput = null)
     {
         var process = Process.Start(new ProcessStartInfo(fileName, arguments)
         {
@@ -240,14 +268,23 @@ internal static class Program
             RedirectStandardError = true,
             RedirectStandardOutput = true,
         }) ?? throw new InvalidOperationException("Не удалось запустить встроенный инструмент.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdout = new System.Text.StringBuilder();
+        var stderr = new System.Text.StringBuilder();
+        process.OutputDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is null) return;
+            stdout.AppendLine(eventArgs.Data);
+            onOutput?.Invoke(eventArgs.Data);
+        };
+        process.ErrorDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is not null) stderr.AppendLine(eventArgs.Data);
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
         while (!process.WaitForExit(100)) Application.DoEvents();
-        Task.WaitAll(stdoutTask, stderrTask);
-        var stdout = stdoutTask.Result;
-        var stderr = stderrTask.Result;
         if (process.ExitCode != 0)
-            throw new InvalidOperationException((stderr + "\n" + stdout).Trim());
+            throw new InvalidOperationException((stderr.ToString() + "\n" + stdout).Trim());
     }
 
     private static string HashFile(string path)

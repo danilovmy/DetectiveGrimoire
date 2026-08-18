@@ -202,7 +202,8 @@ def main() -> int:
     args.backup_dir.mkdir(parents=True, exist_ok=False)
     output = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "scale": args.scale, "source_manifest": str(args.manifest), "files": []}
     translated_tags = manifest.get("static_tags", {})
-    for resource in files:
+    fitted_total = 0
+    for index, resource in enumerate(files, 1):
         target = root / resource
         if not target.exists():
             raise FileNotFoundError(target)
@@ -211,12 +212,13 @@ def main() -> int:
         shutil.copy2(target, backup)
         source = args.manifest.parent / resource
         local_scales = {tag: scale for tag in translated_tags.get(resource, []) if (scale := fitting_scale(source, target, int(tag), args.scale)) < 0.995}
+        fitted_total += len(local_scales)
         count = scale_swf(target, args.scale, local_scales)
         # A second parse verifies that recompression produced a valid SWF.
         swf.decompress_swf(target.read_bytes())
         output["files"].append({"resource": resource, "heights_scaled": count, "fitted_tags": local_scales, "backup_sha256": sha256(backup), "patched_sha256": sha256(target)})
         suffix = f"; {len(local_scales)} fitted text tags" if local_scales else ""
-        print(f"[scaled] {resource}: {count} text-height values{suffix}")
+        print(f"[scaled] {index}/{len(files)} {resource}: {count} text-height values{suffix}; {fitted_total} individually fitted text blocks total")
     (args.backup_dir / "manifest.json").write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"[done] Backup: {args.backup_dir}")
     return 0

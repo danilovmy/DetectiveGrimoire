@@ -341,7 +341,10 @@ def main() -> int:
     args.backup_dir.mkdir(parents=True, exist_ok=False); manifest = {"created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "translations": str(args.translations), "files": [], "static_tags": {resource: sorted({str(item["tag_id"]) for item in items}) for resource, items in static.items()}}
     with tempfile.TemporaryDirectory(prefix="grimoire-apply-", dir=root / "localization") as folder:
         work = Path(folder)
-        for resource, items in sorted(static.items()):
+        static_items = sorted(static.items())
+        total_resources = len(files)
+        for index, (resource, items) in enumerate(static_items, 1):
+            print(f"[applying] {index}/{total_resources} {resource}")
             text_folder = work / "text" / resource
             tag_folder = text_folder / "texts"
             for item in items:
@@ -358,6 +361,7 @@ def main() -> int:
             run_ffdec(args.java, args.ffdec_jar, fonted, out, text_folder)
             if out.read_bytes()[:3] not in {b"FWS", b"CWS", b"ZWS"}: raise RuntimeError(f"Invalid SWF from FFDec: {resource}")
         if dynamic:
+            print(f"[applying] {total_resources}/{total_resources} {MAIN_SWF}")
             out = work / "patched" / MAIN_SWF; out.parent.mkdir(parents=True, exist_ok=True); updated = patch_main(root / MAIN_SWF, out, dynamic)
             if updated != sum(map(len, dynamic.values())): raise RuntimeError("ABC update count mismatch")
         for resource in sorted(files):

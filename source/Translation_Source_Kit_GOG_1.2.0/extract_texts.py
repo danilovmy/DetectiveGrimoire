@@ -114,12 +114,14 @@ def export_static_occurrences(
     export_root = work_root / "static"
     swf_files = sorted(asset_root.rglob("*.swf"))
     parent_dirs = sorted({path.parent for path in swf_files})
+    print(f"[extract-plan] {len(swf_files)} SWF files in {len(parent_dirs)} resource groups")
 
-    for parent in parent_dirs:
+    for index, parent in enumerate(parent_dirs, 1):
         relative_parent = parent.relative_to(asset_root)
         output = export_root / relative_parent
         output.mkdir(parents=True, exist_ok=True)
-        print(f"[static] {relative_parent.as_posix() or '.'}")
+        in_group = sum(path.parent == parent for path in swf_files)
+        print(f"[extract] {index}/{len(parent_dirs)} {relative_parent.as_posix() or '.'} ({in_group} SWF files)")
         run_ffdec(
             java,
             ffdec_jar,
