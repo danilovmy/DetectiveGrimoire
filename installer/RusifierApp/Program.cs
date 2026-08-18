@@ -20,7 +20,7 @@ internal static class Program
         try
         {
             var payloadRoot = ExtractPayload();
-            var manifest = JsonSerializer.Deserialize<VersionManifest>(File.ReadAllText(Path.Combine(payloadRoot, "version.json")))
+            var manifest = JsonSerializer.Deserialize<VersionManifest>(File.ReadAllText(Path.Combine(payloadRoot, "version.json")), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidDataException("Не удалось прочитать manifest русификатора.");
 
             if (!File.Exists(Path.Combine(gameRoot, manifest.GameExecutable)))
@@ -122,7 +122,8 @@ internal static class Program
 
     private static string ExtractPayload()
     {
-        var root = Path.Combine(Path.GetTempPath(), "DetectiveGrimoire-RU-Installer", "1.0.27");
+        var payloadVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "current";
+        var root = Path.Combine(Path.GetTempPath(), "DetectiveGrimoire-RU-Installer", payloadVersion);
         var marker = Path.Combine(root, ".ready");
         if (File.Exists(marker)) return root;
         if (Directory.Exists(root)) Directory.Delete(root, true);
